@@ -14,6 +14,7 @@ http = require 'http'
 https = require 'https'
 url = require 'url'
 querystring = require 'querystring'
+fs = require 'fs'
 
 badgeEmojis =
   Excellence: ':star:'
@@ -31,14 +32,26 @@ badgeEmojis =
   SCModelCitizenAward: ':innocent:'
   SCShowMeTheMoneyAward: ':moneybag:'
 
+credentials = JSON.parse process.env.GOOSE_CREDS 
+console.log process.env
+console.log credentials
 
-  
-
-request = (options, callback) ->
+request = (options, data, callback) ->
   req = https.request options, (resp) ->
+    console.log 'The creds for the request:'
+    console.log credentials
+    console.log ''
+    console.log 'The options:'
+    console.log options
+    console.log ''
     raw = ''
     if resp.statusCode != 200
       console.log resp.statusCode, resp.statusMessage
+    if resp.statusCode == 401 && resp.statusMessage == "Unauthorized"
+      console.log "Need to refresh access token"
+      refreshToken( () -> 
+        request(options, data, callback))
+      return
     resp.on 'data', (chunk) ->
       raw += chunk.toString()
     resp.on 'end', () ->
@@ -49,25 +62,37 @@ request = (options, callback) ->
       console.log 'request errored out'
       console.log error
       console.log error.message
-    
-    req.end()
+   
+   if data?
+     req.write(data)
+   req.end()
 
 get = (path, callback) ->
+  #delete require.cache[require.resolve '../credentials.json']
+  #json = require '../credentials.json'
+  console.log "IN GET"
+  console.log credentials
   options = 
     hostname: 'app.7geese.com'
     port: 443
     path: path
     method: 'GET'
     headers:
-      Authorization: 'Bearer AUTH_TOKEN'
-  request options, callback
+      Authorization: 'Bearer ' + credentials.access_token
+  request options, null, callback
 
-post = (path, callback) ->
+refreshToken = (callback) ->
+  console.log credentials
+  console.log "Refreshing token"
+  console.log typeof credentials
+  console.log credentials.refresh_token
+  #delete require.cache[require.resolve '../credentials.json']
+  #json = require '../credentials.json'
+ 
 
-refreshToken = () ->
   postData = querystring.stringify(
-    refresh_token: ''
-    client_id: 'CLIENT_ID'
+    refresh_token: credentials.refresh_token 
+    client_id: 'JGZp6YU0JzgPlqnSgoOEI07KiJZYHYZET8zJMFQq'
     grant_type: 'refresh_token'
     state: 'my_state'
   )
@@ -80,7 +105,24 @@ refreshToken = () ->
     headers:
       'Content-Type': 'application/x-www-form-urlencoded'
       'Content-Length': Buffer.byteLength(postData)
-   request options, callback
+
+   request options, postData, (response) ->
+     stringResp = JSON.stringify(response)
+     console.log stringResp
+     credentials = response
+     console.log "new creds"
+     console.log credentials
+     if callback?
+       callback()
+     #fs.writeFile 'credentials.json', stringResp, 'utf-8', (err) ->
+     #  console.log "done writing"
+     #  if err
+     #    console.log err
+     #  delete require.cache[require.resolve '../credentials.json']
+     #  json = require '../credentials.json'
+     #  console.log json.access_token
+     #  console.log "Calling back"
+     #  callback()
 
 
 
@@ -94,22 +136,28 @@ buildCallback = (recognition, res) ->
        "\"#{recognition.message}\"\n#{recognition.recognition_url}"
        res.send recognitionMessage
 
-todaysRecognitions = (res) ->
-   res.send "Todays recognitions"
+yesterdaysRecognitions = (res) ->
+   res.send "Yesterdays recognitions"
    today = new Date().toISOString().split('T')[0]
    path = "/api/v/2.0/recognitions/?created__date=#{today}"
    get path, (response) ->
-     console.log "response"
-     console.log response
      if !response.results?
        res.send "There was a problem getting the recognitions"
+     else if response.count == 0
+       res.send "No recognitions yesterday. Go out and recognize your co-workers on what a good job they're doing"
      for recognition in response.results
        badgeUrl = url.parse(recognition.badge)
        get badgeUrl.pathname, buildCallback(recognition, res) 
 
+invalidateToken = (res) ->
+  credentials.access_token = ''
+  console.log "Invalidated token"
+  console.log credentials
+
 module.exports = (robot) ->
-  robot.respond /r/i, todaysRecognitions
-  schedule.scheduleJob "10 * * * * *", refreshToken
+  robot.respond /recognition/i, yesterdaysRecognitions
+  robot.respond /refresh/i, refreshToken
+  robot.respond /inv/i, invalidateToken
     
 
   # robot.hear /badger/i, (res) ->
